@@ -1,7 +1,7 @@
 require("dotenv").config();
 const { google } = require("googleapis");
 
-// Función para generar un retraso aleatorio entre 1 y 10 segundos
+// Función para generar un retraso aleatorio sin necesidad de `sleep()`
 function delay() {
   const delayTime = Math.floor(Math.random() * (9000 - 3000 + 1)) + 3000; // Aleatorio entre 1000ms (1s) y 10000ms (10s)
   return new Promise(resolve => setTimeout(resolve, delayTime)); // Devuelve una promesa que se resuelve después del delay
@@ -27,8 +27,8 @@ exports.handler = async (event) => {
     const gmailProfile = await gmail.users.getProfile({ userId: "me" });
     console.log("🔍 Buscando correos en la cuenta:", gmailProfile.data.emailAddress);
 
-    // Pausa aleatoria antes de realizar la búsqueda de correos
-    await delay();
+    // Retraso aleatorio antes de obtener los mensajes
+    await delay();  // Pausa de entre 1 y 10 segundos
 
     const response = await gmail.users.messages.list({
       userId: "me",
@@ -41,48 +41,7 @@ exports.handler = async (event) => {
       return { statusCode: 404, body: JSON.stringify({ message: "No hay mensajes recientes" }) };
     }
 
-    // ------------ Lógica de Disney+ -----------------
-    const disneySubjects = [
-      "amazon.com: Sign-in attempt", 
-      "Tu código de acceso único para Disney+" // Asunto específico de Disney+
-    ];
-
-    const disneyLinks = [
-      "https://www.disneyplus.com/codigo" // Enlace que podría ser válido para Disney+
-    ];
-
-    // Procesar los mensajes de Disney+
-    for (let msg of response.data.messages) {
-      const message = await gmail.users.messages.get({ userId: "me", id: msg.id });
-      const headers = message.data.payload.headers;
-      const toHeader = headers.find(h => h.name === "To");
-      const subjectHeader = headers.find(h => h.name === "Subject");
-      const dateHeader = headers.find(h => h.name === "Date");
-      const timestamp = new Date(dateHeader.value).getTime();
-      const now = new Date().getTime();
-
-      console.log("📤 Destinatario del correo:", toHeader ? toHeader.value : "No encontrado");
-      console.log("📌 Asunto encontrado:", subjectHeader ? subjectHeader.value : "No encontrado");
-      console.log("🕒 Fecha del correo:", dateHeader ? dateHeader.value : "No encontrado");
-      console.log("⏳ Diferencia de tiempo (ms):", now - timestamp);
-      console.log("📝 Cuerpo del correo:", getDisneyPlusMessageBody(message.data)); // Usamos solo para Disney+
-
-      // Verificar si es un correo con asunto de Disney+ y reciente
-      if (
-        toHeader &&
-        toHeader.value.toLowerCase().includes(email.toLowerCase()) &&
-        disneySubjects.some(subject => subjectHeader.value.includes(subject)) &&
-        (now - timestamp) <= 10 * 60 * 1000 // 10 minutos de diferencia
-      ) {
-        const body = getDisneyPlusMessageBody(message.data); // Usamos solo para Disney+
-        console.log("🎬 Cuerpo del mensaje Disney+:", body);
-
-        // Retornar el cuerpo del mensaje de Disney+ para mostrarlo en el frontend
-        return { statusCode: 200, body: JSON.stringify({ alert: "Código de Disney+ encontrado", body }) };
-      }
-    }
-
-    // ------------ Lógica de Netflix -----------------
+    // 🔹 Filtrar correos por asunto
     const validSubjects = [
       "Importante: Cómo actualizar tu Hogar con Netflix",
       "Tu código de acceso temporal de Netflix",
@@ -95,7 +54,7 @@ exports.handler = async (event) => {
       "https://www.netflix.com/account/update-primary-location?nftoken="
     ];
 
-  
+    // Procesar cada mensaje encontrado
     for (let msg of response.data.messages) {
       const message = await gmail.users.messages.get({ userId: "me", id: msg.id });
       const headers = message.data.payload.headers;
@@ -109,15 +68,15 @@ exports.handler = async (event) => {
       console.log("📌 Asunto encontrado:", subjectHeader ? subjectHeader.value : "No encontrado");
       console.log("🕒 Fecha del correo:", dateHeader ? dateHeader.value : "No encontrado");
       console.log("⏳ Diferencia de tiempo (ms):", now - timestamp);
-      console.log("📝 Cuerpo del correo:", getNetflixMessageBody(message.data)); // Usamos solo para Netflix
+      console.log("📝 Cuerpo del correo:", getMessageBody(message.data));
 
       if (
         toHeader &&
         toHeader.value.toLowerCase().includes(email.toLowerCase()) &&
         validSubjects.some(subject => subjectHeader.value.includes(subject)) &&
-        (now - timestamp) <= 10 * 60 * 1000 // 10 minutos de diferencia
+        (now - timestamp) <= 10 * 60 * 1000 // Aumentar a 10 minutos para pruebas
       ) {
-        const body = getNetflixMessageBody(message.data); // Usamos solo para Netflix
+        const body = getMessageBody(message.data);
         const link = extractLink(body, validLinks);
         if (link) {
           return { statusCode: 200, body: JSON.stringify({ link: link.replace(/\]$/, "") }) };
@@ -125,35 +84,16 @@ exports.handler = async (event) => {
       }
     }
 
-    return { statusCode: 404, body: JSON.stringify({ message: "No se encontró un resultado para tu cuenta, vuelve a intentar nuevamente" }) };
+    return { statusCode: 404, body: JSON.stringify({ message: "No se ha encuentra un resultado para tu cuenta, vuelve a intentar nuevamente" }) };
   } catch (error) {
     return { statusCode: 500, body: JSON.stringify({ error: error.message }) };
   }
 };
 
-// Función específica para Disney+
-function getDisneyPlusMessageBody(message) {
-  if (message.payload.parts) {
-    for (let part of message.payload.parts) {
-      if (part.mimeType === "text/html" && part.body.data) {
-        return Buffer.from(part.body.data, "base64").toString("utf-8");
-      }
-    }
-  }
-  
-  if (message.payload.body.data) {
-    return Buffer.from(message.payload.body.data, "base64").toString("utf-8");
-  }
-
-  return message.snippet || "";
-}
-
-// Función específica para Netflix
-function getNetflixMessageBody(message) {
+function getMessageBody(message) {
   if (!message.payload.parts) {
     return message.snippet || "";
   }
-  
   for (let part of message.payload.parts) {
     if (part.mimeType === "text/plain" && part.body.data) {
       return Buffer.from(part.body.data, "base64").toString("utf-8");
@@ -168,20 +108,24 @@ function extractLink(text, validLinks) {
   if (matches) {
     console.log("🔗 Enlaces encontrados en el correo:", matches);
 
+    // Primero, buscaremos los enlaces válidos de tipo "account/travel/verify" o "account/update-primary-location"
     const preferredLinks = [
       "https://www.netflix.com/account/travel/verify?nftoken=",
       "https://www.netflix.com/account/update-primary-location?nftoken="
     ];
 
+    // Buscamos primero los enlaces prioritarios (travel/verify o update-primary-location)
     const validLink = matches.find(url =>
       preferredLinks.some(valid => url.includes(valid))
     );
 
+    // Si encontramos un enlace válido de los mencionados, se redirige a él
     if (validLink) {
       console.log("🔗 Redirigiendo al enlace válido encontrado:", validLink);
       return validLink.replace(/\]$/, "");
     }
 
+    // Si no encontramos ninguno de los enlaces prioritarios, buscamos el enlace "password?g="
     const fallbackLink = matches.find(url => url.includes("https://www.netflix.com/password?g="));
 
     if (fallbackLink) {
